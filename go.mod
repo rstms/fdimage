@@ -3,6 +3,7 @@ module github.com/rstms/fdimage
 go 1.22.1
 
 require (
+	github.com/rstms/go-fs v0.0.0-20180402235330-b7b9ca407fff
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.10.0
