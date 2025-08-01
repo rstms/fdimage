@@ -1,38 +1,367 @@
 package image
 
 import (
-	"github.com/rstms/go-fs/fs"
+	"bytes"
+	"fmt"
+	"github.com/rstms/fdimage/fat"
+	"github.com/rstms/fdimage/fs"
+	"io"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
-type Floppy struct {
-	file *os.File
-	fd   *fs.FileDisk
+type FdImage struct {
+	Filename   string
+	FileDisk   *fs.FileDisk
+	FileSystem *fat.FileSystem
+	dir        fs.Directory
+	cwd        string
 }
 
 const KB = 1024
 const KBSize = 1440
 const ImageSize = KBSize * KB
 
-func createBackingFile(filename) error {
+func IsFile(pathname string) bool {
+	_, err := os.Stat(pathname)
+	return !os.IsNotExist(err)
+}
+
+func createBackingFile(filename string) (*os.File, error) {
 	file, err := os.Create(filename)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 	err = file.Truncate(ImageSize)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func CreateFdImage(filename, label, name string) error {
+	file, err := createBackingFile(filename)
+	if err != nil {
+		return err
+	}
+	fd, err := fs.NewFileDisk(file)
+	if err != nil {
+		file.Close()
+		return err
+	}
+	config := fat.SuperFloppyConfig{
+		FATType: fat.FAT12,
+		Label:   label,
+		OEMName: name,
+	}
+	err = fat.FormatSuperFloppy(fd, &config)
+	if err != nil {
+		return err
+	}
+	defer fd.Close()
+	return nil
+}
+
+func OpenFdImage(filename string) (*FdImage, error) {
+	if !IsFile(filename) {
+		return nil, fmt.Errorf("file not found: %s", filename)
+	}
+	file, err := os.OpenFile(filename, os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := fs.NewFileDisk(file)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	fs, err := fat.New(fd)
+	if err != nil {
+		return nil, err
+	}
+	floppy := FdImage{
+		Filename:   filename,
+		FileDisk:   fd,
+		FileSystem: fs,
+	}
+	err = floppy.setRootDir()
+	if err != nil {
+		return nil, err
+	}
+	return &floppy, nil
+}
+
+func (f *FdImage) Mkdir(path string) error {
+	fmt.Printf("Mkdir(%s)\n", path)
+	name, err := f.setDir(path)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Adding Directory: %s cwd=%s %+v\n", name, f.cwd, f.dir)
+	_, err = f.dir.AddDirectory(name)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func NewImage(filename string) (*FdImage, error) {
-
-	f = Floppy{}
-	err := createBackingFile(filename)
-	if err != nil {
-		return nil, error
+func (f *FdImage) Chdir(path string) error {
+	fmt.Printf("Chdir(%s)\n", path)
+	parts := []string{}
+	var tail string
+	for path != "" {
+		path, tail = filepath.Split(path)
+		path = strings.TrimRight(path, string(filepath.Separator))
+		if tail != "" {
+			parts = append(parts, tail)
+		}
 	}
-	return &f, nil
+	err := f.setRootDir()
+	if err != nil {
+		return err
+	}
+	for i, part := range parts {
+		fmt.Printf("part[%d] = %s\n", i, part)
+	}
+	for i := len(parts) - 1; i >= 0; i-- {
+		name := parts[i]
+		fmt.Printf("setting dir %d %s\n", i, name)
+		entry := f.dir.Entry(name)
+		if entry == nil {
+			return fmt.Errorf("not found: %s", name)
+		}
+		if !entry.IsDir() {
+			return fmt.Errorf("not a directory: %s", name)
+		}
+		dir, err := entry.Dir()
+		if err != nil {
+			return err
+		}
+		f.dir = dir
+		if f.cwd == "/" {
+			f.cwd += entry.Name()
+		} else {
+			f.cwd += "/" + entry.Name()
+		}
+		fmt.Printf("new cwd=%s %+v %+v\n", f.cwd, entry, dir)
+	}
+	return nil
+}
+
+func (f *FdImage) setRootDir() error {
+	rootDir, err := f.FileSystem.RootDir()
+	if err != nil {
+		return err
+	}
+	f.dir = rootDir
+	f.cwd = "/"
+	return nil
+}
+
+func (f *FdImage) setDir(filename string) (string, error) {
+	fmt.Printf("setDir(%s)\n", filename)
+	if filename == "" {
+		return "", nil
+	}
+	if filename == string(filepath.Separator) {
+		return "", f.setRootDir()
+	}
+	path, name := filepath.Split(filename)
+	if path != "" {
+		path = strings.TrimRight(path, string(filepath.Separator))
+		err := f.Chdir(path)
+		if err != nil {
+			return "", err
+		}
+	}
+	fmt.Printf("setDir returning %s cwd=%s\n", name, f.cwd)
+	return name, nil
+}
+
+func (f *FdImage) WriteFile(filename string, data []byte) (int64, error) {
+	fmt.Printf("WriteFile(%s [%d bytes])\n", filename, len(data))
+	name, err := f.setDir(filename)
+	if err != nil {
+		return 0, err
+	}
+	entry, err := f.dir.AddFile(name)
+	if err != nil {
+		return 0, err
+	}
+	file, err := entry.File()
+	if err != nil {
+		return 0, err
+	}
+	buf := bytes.NewBuffer(data)
+	count, err := io.Copy(file, buf)
+	if err != nil {
+		return 0, err
+	}
+	fmt.Printf("wrote %d bytes to %s\n", count, filename)
+	return count, nil
+}
+
+func (f *FdImage) ReadFile(filename string) ([]byte, error) {
+	fmt.Printf("ReadFile(%s)\n", filename)
+	name, err := f.setDir(filename)
+	if err != nil {
+		return []byte{}, err
+	}
+	entry := f.dir.Entry(name)
+	if entry == nil {
+		return []byte{}, fmt.Errorf("file not found: %s", filename)
+	}
+
+	fileSize, err := entry.FileSize()
+	if err != nil {
+		return []byte{}, err
+	}
+	fmt.Printf("fileSize: %d\n", fileSize)
+
+	file, err := entry.File()
+	if err != nil {
+		return []byte{}, err
+	}
+
+	buf := make([]byte, fileSize)
+	count, err := file.Read(buf)
+	switch err {
+	case nil:
+	case io.EOF:
+	default:
+		return []byte{}, err
+	}
+	fmt.Printf("read %d bytes from %s\n", count, filename)
+	if uint32(count) != fileSize {
+		return []byte{}, fmt.Errorf("read underrun: expected=%d read=%d\n", fileSize, count)
+	}
+	return buf, nil
+}
+
+/*
+const BUFSIZE = 8192
+
+func (f *FdImage) ReadFile(filename string) ([]byte, error) {
+	fmt.Printf("ReadFile(%s)\n", filename)
+	name, err := f.setDir(filename)
+	if err != nil {
+		return []byte{}, err
+	}
+	entry := f.dir.Entry(name)
+	if entry == nil {
+		return []byte{}, fmt.Errorf("file not found: %s", filename)
+	}
+
+	if entry.IsDir() {
+		return []byte{}, fmt.Errorf("attempted read of directory as file: %s", filename)
+
+	}
+	fmt.Printf("DirectoryEntry: %+v\n", entry)
+
+	var fatDirectoryEntry *fat.DirectoryEntry
+	fatDirectoryEntry = entry.(*fat.DirectoryEntry)
+	fmt.Printf("fatDirectoryEntry: %+v\n", fatDirectoryEntry)
+
+	fileSize, err := entry.FileSize()
+	if err != nil {
+		return []byte{}, err
+	}
+	fmt.Printf("fileSize: %d\n", fileSize)
+
+	file, err := entry.File()
+	if err != nil {
+		return []byte{}, err
+	}
+
+	fmt.Printf("File: %+v\n", file)
+
+	//var fatFile *fat.File
+	//fatFile = file.(*fat.File)
+	//fmt.Printf("FileEntry: %+v\n", fatFile.entry)
+
+	var chunkTotal int64
+	var buf bytes.Buffer
+	for done := false; !done; {
+		chunk := make([]byte, BUFSIZE)
+		count, err := file.Read(chunk)
+		switch err {
+		case nil:
+		case io.EOF:
+			fmt.Printf("EOF returned after reading %d bytes\n", chunkTotal)
+			done = true
+		default:
+			return []byte{}, err
+		}
+		fmt.Printf("  read chunk of %d bytes\n", count)
+		chunkTotal += int64(count)
+		wcount, err := buf.Write(chunk[:count])
+		if err != nil {
+			return []byte{}, err
+		}
+		if wcount != count {
+			fmt.Errorf("chunk write incomplete: %d != %d", wcount, count)
+		}
+	}
+	bufLen := buf.Len()
+	data := buf.Bytes()
+	dataLen := len(data)
+	if dataLen != bufLen {
+		fmt.Errorf("buffer length (%d) mismatches data length (%d)", bufLen, dataLen)
+	}
+	if int64(dataLen) != chunkTotal {
+		fmt.Errorf("chunk total (%d) mismatches data length (%d)", chunkTotal, dataLen)
+	}
+	fmt.Printf("read %d bytes from %s\n", dataLen, filename)
+	return data, nil
+}
+*/
+
+func (f *FdImage) List(pathname string, longFlag bool) ([]string, error) {
+	fmt.Printf("List(%s, %v)\n", pathname, longFlag)
+	names := []string{}
+	name, err := f.setDir(pathname)
+	if err != nil {
+		return names, err
+	}
+	fmt.Printf("name=%s cwd=%s\n", name, f.cwd)
+	var entries []fs.DirectoryEntry
+	if name == "" {
+		entries = f.dir.Entries()
+	} else {
+		entry := f.dir.Entry(name)
+		if entry == nil {
+			return names, fmt.Errorf("not found: %s", pathname)
+		}
+		if entry.IsDir() {
+			fmt.Printf("entry is Dir %+v\n", entry)
+			dir, err := entry.Dir()
+			if err != nil {
+				return names, err
+			}
+			f.dir = dir
+			entries = dir.Entries()
+		} else {
+			fmt.Printf("entry is File %+v\n", entry)
+			entries = []fs.DirectoryEntry{entry}
+		}
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		shortName := entry.ShortName()
+		if entry.IsDir() {
+			name += "/"
+		}
+		if longFlag {
+			names = append(names, fmt.Sprintf("%s\t%s\t%+v", name, shortName, entry))
+		} else {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+func (f *FdImage) Close() error {
+	return f.FileDisk.Close()
 }

@@ -53,8 +53,6 @@ optional edit command opens current config file in system editor
 `,
 	Args: cobra.RangeArgs(0, 1),
 	Run: func(cmd *cobra.Command, args []string) {
-
-		name := ProgramName()
 		if len(args) > 0 {
 			switch args[0] {
 			case "cat":
@@ -68,39 +66,44 @@ optional edit command opens current config file in system editor
 				initConfigFile()
 				return
 			default:
-				cobra.CheckErr(fmt.Errorf("unknown command: %s", args[0]))
 			}
 		}
-		if ViperGetBool("verbose") {
-			currentUser, err := user.Current()
-			cobra.CheckErr(err)
-			hostname, err := os.Hostname()
-			cobra.CheckErr(err)
-			fmt.Printf("# %s config\n", name)
-			fmt.Printf("# active: %s\n", filepath.Clean(viper.ConfigFileUsed()))
-			fmt.Printf("# generated: %s by %s@%s (%s_%s)\n",
-				time.Now().Format(time.DateTime),
-				currentUser.Username, hostname,
-				runtime.GOOS, runtime.GOARCH,
-			)
-
-			home, err := os.UserHomeDir()
-			cobra.CheckErr(err)
-			fmt.Printf("# user_home_dir: %s\n", home)
-
-			userConfig, err := os.UserConfigDir()
-			cobra.CheckErr(err)
-			fmt.Printf("# default_config_dir: %s\n", filepath.Join(userConfig, name))
-
-			userCache, err := os.UserCacheDir()
-			cobra.CheckErr(err)
-			fmt.Printf("# default_cache_dir: %s\n", filepath.Join(userCache, name))
-			fmt.Println("")
-		}
-
-		err := viper.WriteConfigTo(os.Stdout)
-		cobra.CheckErr(err)
+		dumpConfigFile()
 	},
+}
+
+func dumpConfigFile() {
+	name := ProgramName()
+
+	if ViperGetBool("verbose") {
+		currentUser, err := user.Current()
+		cobra.CheckErr(err)
+		hostname, err := os.Hostname()
+		cobra.CheckErr(err)
+		fmt.Printf("# %s config\n", name)
+		fmt.Printf("# active: %s\n", filepath.Clean(viper.ConfigFileUsed()))
+		fmt.Printf("# generated: %s by %s@%s (%s_%s)\n",
+			time.Now().Format(time.DateTime),
+			currentUser.Username, hostname,
+			runtime.GOOS, runtime.GOARCH,
+		)
+
+		home, err := os.UserHomeDir()
+		cobra.CheckErr(err)
+		fmt.Printf("# user_home_dir: %s\n", home)
+
+		userConfig, err := os.UserConfigDir()
+		cobra.CheckErr(err)
+		fmt.Printf("# default_config_dir: %s\n", filepath.Join(userConfig, name))
+
+		userCache, err := os.UserCacheDir()
+		cobra.CheckErr(err)
+		fmt.Printf("# default_cache_dir: %s\n", filepath.Join(userCache, name))
+		fmt.Println("")
+	}
+
+	err := viper.WriteConfigTo(os.Stdout)
+	cobra.CheckErr(err)
 }
 
 func initConfigFile() {

@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-var ViperPrefix = ProgramName() + ".cli."
+var ViperPrefix = "fdimage.cli."
 var LogFile *os.File
 
 var CONFIRM_ACCEPT_MESSAGE = "Proceeding"

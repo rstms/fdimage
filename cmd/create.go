@@ -37,9 +37,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// createCmd represents the create command
 var createCmd = &cobra.Command{
-	Use:   "create FILENAME",
+	Use:   "create IMAGE_FILE [LABEL] [OEM_NAME]",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. For example:
@@ -47,23 +46,28 @@ and usage of using your command. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.RangeArgs(1, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		floppy, err := image.NewImage(args[0])
-		cobra.CheckErr()
+		filename := args[0]
+		force := ViperGetBool("create.force")
+		if IsFile(filename) && !force {
+			cobra.CheckErr(fmt.Errorf("file exists: %s", args[0]))
+		}
+		label := ""
+		if len(args) > 1 {
+			label = args[1]
+		}
+		name := ""
+		if len(args) > 2 {
+			name = args[2]
+		}
+		err := image.CreateFdImage(filename, label, name)
+		cobra.CheckErr(err)
+		fmt.Printf("created: %s\n", args[0])
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(createCmd)
-
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// createCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// createCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	OptionSwitch(createCmd, "force", "f", "bypass confirmation prompt")
 }

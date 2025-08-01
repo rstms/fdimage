@@ -32,12 +32,12 @@ package cmd
 
 import (
 	"fmt"
-
+	"github.com/rstms/fdimage/image"
 	"github.com/spf13/cobra"
 )
 
-var versionCmd = &cobra.Command{
-	Use:   "version",
+var lsCmd = &cobra.Command{
+	Use:   "ls IMAGE_FILE [PATH]",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. For example:
@@ -45,11 +45,25 @@ and usage of using your command. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(rootCmd.Name() + " version " + rootCmd.Version)
+		image, err := image.OpenFdImage(args[0])
+		cobra.CheckErr(err)
+		defer image.Close()
+		path := ""
+		if len(args) > 1 {
+			path = args[1]
+		}
+		long := ViperGetBool("ls.long")
+		lines, err := image.List(path, long)
+		cobra.CheckErr(err)
+		for _, line := range lines {
+			fmt.Println(line)
+		}
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(lsCmd)
+	OptionSwitch(lsCmd, "long", "l", "detailed listing")
 }

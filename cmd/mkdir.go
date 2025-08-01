@@ -31,13 +31,12 @@ POSSIBILITY OF SUCH DAMAGE.
 package cmd
 
 import (
-	"fmt"
-
+	"github.com/rstms/fdimage/image"
 	"github.com/spf13/cobra"
 )
 
-var versionCmd = &cobra.Command{
-	Use:   "version",
+var mkdirCmd = &cobra.Command{
+	Use:   "mkdir IMAGE_FILE NAME",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. For example:
@@ -45,11 +44,16 @@ and usage of using your command. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
+	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(rootCmd.Name() + " version " + rootCmd.Version)
+		image, err := image.OpenFdImage(args[0])
+		cobra.CheckErr(err)
+		defer image.Close()
+		err = image.Mkdir(args[1])
+		cobra.CheckErr(err)
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(mkdirCmd)
 }

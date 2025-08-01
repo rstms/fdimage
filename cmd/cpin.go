@@ -31,13 +31,14 @@ POSSIBILITY OF SUCH DAMAGE.
 package cmd
 
 import (
-	"fmt"
+	"github.com/rstms/fdimage/image"
+	"os"
 
 	"github.com/spf13/cobra"
 )
 
-var versionCmd = &cobra.Command{
-	Use:   "version",
+var cpinCmd = &cobra.Command{
+	Use:   "cpin IMAGE_FILE FILENAME [SOURCE_FILENAME]",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. For example:
@@ -45,11 +46,23 @@ and usage of using your command. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
+	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(rootCmd.Name() + " version " + rootCmd.Version)
+		image, err := image.OpenFdImage(args[0])
+		cobra.CheckErr(err)
+		defer image.Close()
+		imageFilename := args[1]
+		sourceFilename := imageFilename
+		if len(args) > 2 {
+			sourceFilename = args[2]
+		}
+		data, err := os.ReadFile(sourceFilename)
+		cobra.CheckErr(err)
+		_, err = image.WriteFile(imageFilename, data)
+		cobra.CheckErr(err)
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(cpinCmd)
 }
