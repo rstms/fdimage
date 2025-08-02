@@ -46,10 +46,8 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		image, err := image.OpenFdImage(args[0])
-		cobra.CheckErr(err)
-		defer image.Close()
-		err = image.Mkdir(args[1])
+		imageFile := args[0]
+		err := image.Mkdir(imageFile, args[1])
 		cobra.CheckErr(err)
 	},
 }

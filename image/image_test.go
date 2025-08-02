@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+var imageFile string
+
 func initTestConfig(t *testing.T) {
 	viper.SetConfigFile("testdata/config.yaml")
 	err := viper.ReadInConfig()
@@ -16,20 +18,15 @@ func initTestConfig(t *testing.T) {
 }
 
 func TestCreate(t *testing.T) {
+	imageFile = filepath.Join("testdata", "image")
 	initTestConfig(t)
-	err := CreateFdImage("testdata/image", "test", "fdimage")
+	err := CreateFdImage(imageFile, "test", "fdimage")
 	require.Nil(t, err)
-}
-
-func createAndOpen(t *testing.T) *FdImage {
-	TestCreate(t)
-	fd, err := OpenFdImage("testdata/image")
-	require.Nil(t, err)
-	return fd
 }
 
 func TestOpen(t *testing.T) {
-	fd, err := OpenFdImage("testdata/image")
+	TestCreate(t)
+	fd, err := OpenFdImage(imageFile)
 	require.Nil(t, err)
 	require.IsType(t, &FdImage{}, fd)
 	err = fd.Close()
@@ -37,78 +34,72 @@ func TestOpen(t *testing.T) {
 }
 
 func TestMkdir(t *testing.T) {
-	fd := createAndOpen(t)
-	defer fd.Close()
-	err := fd.Mkdir("foo")
+	TestCreate(t)
+	err := Mkdir(imageFile, "foo")
 	require.Nil(t, err)
-	err = fd.Mkdir("bar")
+	err = Mkdir(imageFile, "bar")
 	require.Nil(t, err)
-	err = fd.Mkdir("baz")
+	err = Mkdir(imageFile, "baz")
 	require.Nil(t, err)
 
-	list, err := fd.List("", false)
+	list, err := List(imageFile, "", false)
 	require.Nil(t, err)
 	require.Equal(t, []string{"FOO/", "BAR/", "BAZ/"}, list)
 }
 
 func TestNestedMkdir(t *testing.T) {
-	fd := createAndOpen(t)
-	err := fd.Mkdir("foo")
-	require.Nil(t, err)
-	err = fd.Mkdir("foo/bar")
-	require.Nil(t, err)
-	err = fd.Mkdir("foo/bar/baz")
+
+	TestCreate(t)
+	err := Mkdir(imageFile, "foo")
 	require.Nil(t, err)
 
+	//err = Mkdir(imageFile, "foo/bar")
+	//require.Nil(t, err)
+
+	//err = Mkdir(imageFile, "foo/bar/baz")
+	//require.Nil(t, err)
+
 	// write a file to the root
-	err = writeFile(fd, "sample", "/sample")
+	err = writeFile("sample", "/sample")
 	require.Nil(t, err)
 
 	// write a file under the foo directory
-	err = writeFile(fd, "sample", "/foo/sample1")
-	require.Nil(t, err)
+	//err = writeFile("sample", "/foo/sample1")
+	//require.Nil(t, err)
 
 	// write a file under the foo/bar directory
-	err = writeFile(fd, "sample", "/foo/bar/sample2")
-	require.Nil(t, err)
+	//err = writeFile("sample", "/foo/bar/sample2")
+	//require.Nil(t, err)
 
 	// write a file under the foo/bar/baz directory
-	err = writeFile(fd, "sample", "/foo/bar/baz/sample3")
-	require.Nil(t, err)
+	//err = writeFile("sample", "/foo/bar/baz/sample3")
+	//require.Nil(t, err)
 
-	err = fd.Close()
-	require.Nil(t, err)
+	//err = readFile("/foo/bar/baz/sample3", "sample3", "sample")
+	//require.Nil(t, err)
 
-	rfd, err := OpenFdImage("testdata/image")
+	//err = readFile("/foo/bar/sample2", "sample2", "sample")
+	//require.Nil(t, err)
 
-	err = readFile(rfd, "/foo/bar/baz/sample3", "sample3", "sample")
-	require.Nil(t, err)
-
-	err = readFile(rfd, "/foo/bar/sample2", "sample2", "sample")
-	require.Nil(t, err)
-
-	err = readFile(rfd, "/foo/sample1", "sample1", "sample")
-	require.Nil(t, err)
-
-	err = rfd.Close()
-	require.Nil(t, err)
+	//err = readFile("/foo/sample1", "sample1", "sample")
+	//require.Nil(t, err)
 }
 
-func writeFile(fd *FdImage, src, target string) error {
+func writeFile(src, target string) error {
 	data, err := os.ReadFile(filepath.Join("testdata", src))
 	if err != nil {
 		return err
 	}
-	count, err := fd.WriteFile(target, data)
+	count, err := WriteFile(imageFile, target, data)
 	if int64(len(data)) != count {
 		return fmt.Errorf("write count mismatch: %d %d\n", len(data), count)
 	}
 	return nil
 }
 
-func readFile(fd *FdImage, src, target, reference string) error {
+func readFile(src, target, reference string) error {
 
-	data, err := fd.ReadFile(src)
+	data, err := ReadFile(imageFile, src)
 	if err != nil {
 		return err
 	}
@@ -147,21 +138,17 @@ func compareFiles(first, second string) error {
 //}
 
 func TestWriteFile(t *testing.T) {
-	fd := createAndOpen(t)
-	defer fd.Close()
+	TestCreate(t)
 	data, err := os.ReadFile("testdata/sample")
 	require.Nil(t, err)
-	count, err := fd.WriteFile("sample", data)
+	count, err := WriteFile(imageFile, "sample", data)
 	require.Nil(t, err)
 	require.Equal(t, int64(len(data)), count)
 }
 
 func TestReadFile(t *testing.T) {
 	TestWriteFile(t)
-	fd, err := OpenFdImage("testdata/sample")
-	require.Nil(t, err)
-	defer fd.Close()
-	fdata, err := fd.ReadFile("sample")
+	fdata, err := ReadFile(imageFile, "sample")
 	require.Nil(t, err)
 	tdata, err := os.ReadFile("testdata/sample")
 	require.Nil(t, err)

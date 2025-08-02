@@ -34,6 +34,7 @@ import (
 	"github.com/rstms/fdimage/image"
 	"github.com/spf13/cobra"
 	"os"
+	"path/filepath"
 )
 
 var cpoutCmd = &cobra.Command{
@@ -47,15 +48,14 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		image, err := image.OpenFdImage(args[0])
-		cobra.CheckErr(err)
-		defer image.Close()
-		imageFilename := args[1]
-		destFilename := imageFilename
+		imageFile := args[0]
+		srcImageFilename := args[1]
+		_, name := filepath.Split(srcImageFilename)
+		destFilename := name
 		if len(args) > 2 {
 			destFilename = args[2]
 		}
-		data, err := image.ReadFile(imageFilename)
+		data, err := image.ReadFile(imageFile, srcImageFilename)
 		cobra.CheckErr(err)
 		err = os.WriteFile(destFilename, data, 0600)
 		cobra.CheckErr(err)

@@ -47,15 +47,13 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		image, err := image.OpenFdImage(args[0])
-		cobra.CheckErr(err)
-		defer image.Close()
+		imageFile := args[0]
 		path := ""
 		if len(args) > 1 {
 			path = args[1]
 		}
 		long := ViperGetBool("ls.long")
-		lines, err := image.List(path, long)
+		lines, err := image.List(imageFile, path, long)
 		cobra.CheckErr(err)
 		for _, line := range lines {
 			fmt.Println(line)

@@ -48,9 +48,7 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		image, err := image.OpenFdImage(args[0])
-		cobra.CheckErr(err)
-		defer image.Close()
+		imageFile := args[0]
 		imageFilename := args[1]
 		sourceFilename := imageFilename
 		if len(args) > 2 {
@@ -58,7 +56,7 @@ to quickly create a Cobra application.`,
 		}
 		data, err := os.ReadFile(sourceFilename)
 		cobra.CheckErr(err)
-		_, err = image.WriteFile(imageFilename, data)
+		_, err = image.WriteFile(imageFile, imageFilename, data)
 		cobra.CheckErr(err)
 	},
 }
