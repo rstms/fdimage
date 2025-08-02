@@ -31,37 +31,40 @@ POSSIBILITY OF SUCH DAMAGE.
 package cmd
 
 import (
+	"fmt"
 	"github.com/rstms/fdimage/image"
-	"github.com/spf13/cobra"
 	"os"
-	"path/filepath"
+
+	"github.com/spf13/cobra"
 )
 
-var cpoutCmd = &cobra.Command{
-	Use:   "cpout IMAGE_FILE IMAGE_FILENAME [DEST_FILENAME]",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	Args: cobra.RangeArgs(2, 3),
+var mkisoCmd = &cobra.Command{
+	Use:   "mkiso OUTPUT_FILE SRC_ISO_FILE AUTOEXEC_FILE",
+	Short: "generate boot ISO with modified autoexec.ipxe",
+	Long: `
+    foo
+`,
+	Args: cobra.ExactArgs(3),
 	Run: func(cmd *cobra.Command, args []string) {
-		imageFile := args[0]
-		srcImageFilename := args[1]
-		_, name := filepath.Split(srcImageFilename)
-		destFilename := name
-		if len(args) > 2 {
-			destFilename = args[2]
+		outputFile := args[0]
+		imageFile := args[1]
+		autoexecFile := args[2]
+		force := ViperGetBool("mkiso.force")
+		if force {
+			if IsFile(outputFile) {
+				err := os.Remove(outputFile)
+				cobra.CheckErr(err)
+			}
 		}
-		data, err := image.ReadFile(imageFile, srcImageFilename)
-		cobra.CheckErr(err)
-		err = os.WriteFile(destFilename, data, 0600)
+		if IsFile(outputFile) {
+			cobra.CheckErr(fmt.Errorf("file exists: %s", outputFile))
+		}
+		err := image.CreateISOImage(outputFile, imageFile, autoexecFile)
 		cobra.CheckErr(err)
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(cpoutCmd)
+	rootCmd.AddCommand(mkisoCmd)
+	OptionSwitch(mkisoCmd, "force", "f", "bypass confirmation prompt")
 }

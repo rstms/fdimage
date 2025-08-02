@@ -31,36 +31,41 @@ POSSIBILITY OF SUCH DAMAGE.
 package cmd
 
 import (
+	"fmt"
 	"github.com/rstms/fdimage/image"
 	"os"
 
 	"github.com/spf13/cobra"
 )
 
-var cpinCmd = &cobra.Command{
-	Use:   "cpin IMAGE_FILE FILENAME [SOURCE_FILENAME]",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	Args: cobra.RangeArgs(2, 3),
+var extractCmd = &cobra.Command{
+	Use:   "extract IMAGE_FILE DEST_DIR",
+	Short: "extract files from image",
+	Long: `
+Extract all files from a disk image to directory DEST_DIR.
+`,
+	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		imageFile := args[0]
-		imageFilename := args[1]
-		sourceFilename := imageFilename
-		if len(args) > 2 {
-			sourceFilename = args[2]
+		destDir := args[1]
+		force := ViperGetBool("extract.force")
+		if force {
+			if IsDir(destDir) {
+				err := os.RemoveAll(destDir)
+				cobra.CheckErr(err)
+			}
+			err := os.Mkdir(destDir, 0700)
+			cobra.CheckErr(err)
 		}
-		data, err := os.ReadFile(sourceFilename)
-		cobra.CheckErr(err)
-		_, err = image.WriteFile(imageFile, imageFilename, data)
+		if !IsDir(destDir) {
+			cobra.CheckErr(fmt.Errorf("not a directory: %s", destDir))
+		}
+		err := image.ExtractImageFiles(imageFile, destDir)
 		cobra.CheckErr(err)
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(cpinCmd)
+	rootCmd.AddCommand(extractCmd)
+	OptionSwitch(extractCmd, "force", "f", "bypass confirmation prompt")
 }

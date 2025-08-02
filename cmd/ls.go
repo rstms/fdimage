@@ -33,35 +33,27 @@ package cmd
 import (
 	"fmt"
 	"github.com/rstms/fdimage/image"
+
 	"github.com/spf13/cobra"
 )
 
 var lsCmd = &cobra.Command{
-	Use:   "ls IMAGE_FILE [PATH]",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	Args: cobra.RangeArgs(1, 2),
+	Use:   "ls IMAGE_FILE",
+	Short: "list files in image",
+	Long: `
+List all filenames in a disk image filesystem."
+`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		imageFile := args[0]
-		path := ""
-		if len(args) > 1 {
-			path = args[1]
-		}
-		long := ViperGetBool("ls.long")
-		lines, err := image.List(imageFile, path, long)
+		files, err := image.ListImageFiles(imageFile)
 		cobra.CheckErr(err)
-		for _, line := range lines {
-			fmt.Println(line)
+		for _, file := range files {
+			fmt.Println(file)
 		}
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(lsCmd)
-	OptionSwitch(lsCmd, "long", "l", "detailed listing")
 }

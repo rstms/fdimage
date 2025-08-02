@@ -1,391 +1,397 @@
 package image
 
 import (
-	"bytes"
 	"fmt"
-	"github.com/rstms/fdimage/fat"
-	"github.com/rstms/fdimage/fs"
+	diskfs "github.com/rstms/go-diskfs"
+	diskpkg "github.com/rstms/go-diskfs/disk"
+	"github.com/rstms/go-diskfs/filesystem"
+	"github.com/rstms/go-diskfs/filesystem/iso9660"
 	"io"
+	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
 
-type FdImage struct {
-	Filename   string
-	FileDisk   *fs.FileDisk
-	FileSystem *fat.FileSystem
-	dir        fs.Directory
-	cwd        string
-}
+const (
+	EFI_IMAGE_SIZE         = 1024 * 1440
+	ISO_PAD_BYTES          = 1024
+	ISO_LOGICAL_BLOCK_SIZE = 2048
+)
 
-func (f *FdImage) Close() error {
-	fmt.Printf("Close()\n")
-	return f.FileDisk.Close()
-}
+func CreateEFIImage(imageFilename, efiFilename, efiName string, extraFiles []string) error {
+	fmt.Printf("CreateFdImage(%s, %s, %s, %v)\n", imageFilename, efiFilename, efiName, extraFiles)
 
-const KB = 1024
-const KBSize = 1440
-const ImageSize = KBSize * KB
-
-func isFile(pathname string) bool {
-	_, err := os.Stat(pathname)
-	return !os.IsNotExist(err)
-}
-
-func createBackingFile(filename string) (*os.File, error) {
-	fmt.Printf("createBackingFile(%s)\n", filename)
-	file, err := os.Create(filename)
-	if err != nil {
-		return nil, err
-	}
-	err = file.Truncate(ImageSize)
-	if err != nil {
-		file.Close()
-		return nil, err
-	}
-	return file, nil
-}
-
-func CreateFdImage(filename, label, name string) error {
-	fmt.Printf("CreateFdImage(%s, %s, %s)\n", filename, label, name)
-	file, err := createBackingFile(filename)
+	disk, err := diskfs.Create(imageFilename, EFI_IMAGE_SIZE, diskfs.Raw)
 	if err != nil {
 		return err
 	}
-	fileDisk, err := fs.NewFileDisk(file)
-	if err != nil {
-		file.Close()
-		return err
-	}
-	defer fileDisk.Close()
-	config := fat.SuperFloppyConfig{
-		FATType: fat.FAT12,
-		Label:   label,
-		OEMName: name,
-	}
-	err = fat.FormatSuperFloppy(fileDisk, &config)
-	if err != nil {
-		return err
-	}
-	return nil
-}
+	log.Printf("disk: %+v\n", disk)
+	spec := diskpkg.FilesystemSpec{FSType: filesystem.TypeFat32}
 
-func OpenFdImage(filename string) (*FdImage, error) {
-	fmt.Printf("OpenFdImage(%s)\n", filename)
-	if !isFile(filename) {
-		return nil, fmt.Errorf("file not found: %s", filename)
-	}
-	file, err := os.OpenFile(filename, os.O_RDWR, 0)
+	dfs, err := disk.CreateFilesystem(spec)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	fileDisk, err := fs.NewFileDisk(file)
+	log.Printf("dfs: %+v\n", dfs)
+	err = dfs.Mkdir("/EFI/BOOT")
 	if err != nil {
-		file.Close()
-		return nil, err
+		return err
 	}
-	fileSystem, err := fat.New(fileDisk)
-	if err != nil {
-		return nil, err
-	}
-	fd := FdImage{
-		Filename:   filename,
-		FileDisk:   fileDisk,
-		FileSystem: fileSystem,
-	}
-	err = setRootDir(&fd)
-	if err != nil {
-		return nil, err
-	}
-	return &fd, nil
-}
+	log.Println("mkdir success")
 
-func Mkdir(image, path string) error {
-	fmt.Printf("Mkdir(%s, %s)\n", image, path)
-	fd, err := OpenFdImage(image)
+	err = copyFileToImage(dfs, "/EFI/BOOT/"+efiName, efiFilename)
 	if err != nil {
 		return err
 	}
-	defer fd.Close()
-	name, err := setDir(fd, path)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Adding Directory: %s cwd=%s %+v\n", name, fd.cwd, fd.dir)
-	_, err = fd.dir.AddDirectory(name)
-	if err != nil {
-		return err
-	}
-	return nil
-}
 
-func chdir(fd *FdImage, path string) error {
-	fmt.Printf("Chdir(%s)\n", path)
-	parts := []string{}
-	var tail string
-	for path != "" {
-		path, tail = filepath.Split(path)
-		path = strings.TrimRight(path, string(filepath.Separator))
-		if tail != "" {
-			parts = append(parts, tail)
-		}
-	}
-	err := setRootDir(fd)
-	if err != nil {
-		return err
-	}
-	for i, part := range parts {
-		fmt.Printf("part[%d] = %s\n", i, part)
-	}
-	for i := len(parts) - 1; i >= 0; i-- {
-		name := parts[i]
-		fmt.Printf("setting dir %d %s\n", i, name)
-		entry := fd.dir.Entry(name)
-		if entry == nil {
-			return fmt.Errorf("not found: %s", name)
-		}
-		if !entry.IsDir() {
-			return fmt.Errorf("not a directory: %s", name)
-		}
-		dir, err := entry.Dir()
+	for _, extraFile := range extraFiles {
+		_, name := filepath.Split(extraFile)
+		err = copyFileToImage(dfs, "/"+name, extraFile)
 		if err != nil {
 			return err
 		}
-		fd.dir = dir
-		if fd.cwd == "/" {
-			fd.cwd += entry.Name()
-		} else {
-			fd.cwd += "/" + entry.Name()
-		}
-		fmt.Printf("new cwd=%s %+v %+v\n", fd.cwd, entry, dir)
 	}
 	return nil
 }
 
-func setRootDir(fd *FdImage) error {
-	rootDir, err := fd.FileSystem.RootDir()
+func copyFileToImage(imageFS filesystem.FileSystem, dstPath string, srcPath string) error {
+	log.Printf("copyFileToImage(%s %s)\n", dstPath, srcPath)
+	ifp, err := os.Open(srcPath)
 	if err != nil {
 		return err
 	}
-	fd.dir = rootDir
-	fd.cwd = "/"
+	defer ifp.Close()
+	ofp, err := imageFS.OpenFile(dstPath, os.O_CREATE|os.O_RDWR)
+	if err != nil {
+		return err
+	}
+	defer ofp.Close()
+	_, err = io.Copy(ofp, ifp)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
-func setDir(fd *FdImage, filename string) (string, error) {
-	fmt.Printf("setDir(%s)\n", filename)
-	if filename == "" {
-		return "", nil
+func copyFileFromImage(imageFS filesystem.FileSystem, dstPath string, srcPath string) error {
+	//srcPath = strings.TrimLeft(srcPath, "/")
+	log.Printf("copyFileFromImage(%s %s)\n", dstPath, srcPath)
+	ifp, err := imageFS.OpenFile(srcPath, os.O_RDONLY)
+	if err != nil {
+		return err
 	}
-	if filename == string(filepath.Separator) {
-		return "", setRootDir(fd)
+	defer ifp.Close()
+	log.Printf("opened src: %v\n", ifp)
+	ofp, err := os.Create(dstPath)
+	if err != nil {
+		return err
 	}
-	path, name := filepath.Split(filename)
-	if path != "" {
-		path = strings.TrimRight(path, string(filepath.Separator))
-		err := chdir(fd, path)
-		if err != nil {
-			return "", err
-		}
+	defer ofp.Close()
+	log.Printf("opened dst: %v\n", ifp)
+	_, err = io.Copy(ofp, ifp)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("setDir returning %s cwd=%s\n", name, fd.cwd)
-	return name, nil
+	return nil
 }
 
-func WriteFile(image, filename string, data []byte) (int64, error) {
-	fmt.Printf("WriteFile(%s, %s [%d bytes])\n", image, filename, len(data))
-	fd, err := OpenFdImage(image)
+func copyFileInterImage(dstFS filesystem.FileSystem, dstPath string, srcFS filesystem.FileSystem, srcPath string) error {
+	log.Printf("copyFileInterImage(%s %s)\n", dstPath, srcPath)
+	ifp, err := srcFS.OpenFile(srcPath, os.O_RDONLY)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	defer fd.Close()
-	name, err := setDir(fd, filename)
+	defer ifp.Close()
+	ofp, err := dstFS.OpenFile(dstPath, os.O_CREATE|os.O_RDWR)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	entry, err := fd.dir.AddFile(name)
+	defer ofp.Close()
+	_, err = io.Copy(ofp, ifp)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	file, err := entry.File()
-	if err != nil {
-		return 0, err
-	}
-	buf := bytes.NewBuffer(data)
-	count, err := io.Copy(file, buf)
-	if err != nil {
-		return 0, err
-	}
-	fmt.Printf("wrote %d bytes to %s\n", count, filename)
-	return count, nil
+	return nil
 }
 
-func ReadFile(image, filename string) ([]byte, error) {
-	fmt.Printf("ReadFile(%s)\n", filename)
-	fd, err := OpenFdImage(image)
+func openImageFS(imageFilename string) (filesystem.FileSystem, error) {
+	log.Printf("openImageFS(%s)\n", imageFilename)
+	disk, err := diskfs.Open(imageFilename)
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
-	defer fd.Close()
-	name, err := setDir(fd, filename)
-	if err != nil {
-		return []byte{}, err
-	}
-	entry := fd.dir.Entry(name)
-	if entry == nil {
-		return []byte{}, fmt.Errorf("file not found: %s", filename)
-	}
+	log.Printf("opened disk: %+v\n", disk)
 
-	fileSize, err := entry.FileSize()
+	fs, err := disk.GetFilesystem(0)
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
-	fmt.Printf("fileSize: %d\n", fileSize)
+	log.Printf("opened filesystem: %+v\n", fs)
 
-	file, err := entry.File()
-	if err != nil {
-		return []byte{}, err
-	}
-
-	buf := make([]byte, fileSize)
-	count, err := file.Read(buf)
-	switch err {
-	case nil:
-	case io.EOF:
-	default:
-		return []byte{}, err
-	}
-	fmt.Printf("read %d bytes from %s\n", count, filename)
-	if uint32(count) != fileSize {
-		return []byte{}, fmt.Errorf("read underrun: expected=%d read=%d\n", fileSize, count)
-	}
-	return buf, nil
+	return fs, nil
 }
 
-/*
-const BUFSIZE = 8192
-
-func ReadFile(filename string) ([]byte, error) {
-	fmt.Printf("ReadFile(%s)\n", filename)
-	name, err := f.setDir(filename)
+func walkFS(fs filesystem.FileSystem, dir string) ([]string, error) {
+	entries, err := fs.ReadDir(dir)
 	if err != nil {
-		return []byte{}, err
+		return []string{}, err
 	}
-	entry := f.dir.Entry(name)
-	if entry == nil {
-		return []byte{}, fmt.Errorf("file not found: %s", filename)
-	}
-
-	if entry.IsDir() {
-		return []byte{}, fmt.Errorf("attempted read of directory as file: %s", filename)
-
-	}
-	fmt.Printf("DirectoryEntry: %+v\n", entry)
-
-	var fatDirectoryEntry *fat.DirectoryEntry
-	fatDirectoryEntry = entry.(*fat.DirectoryEntry)
-	fmt.Printf("fatDirectoryEntry: %+v\n", fatDirectoryEntry)
-
-	fileSize, err := entry.FileSize()
-	if err != nil {
-		return []byte{}, err
-	}
-	fmt.Printf("fileSize: %d\n", fileSize)
-
-	file, err := entry.File()
-	if err != nil {
-		return []byte{}, err
-	}
-
-	fmt.Printf("File: %+v\n", file)
-
-	//var fatFile *fat.File
-	//fatFile = file.(*fat.File)
-	//fmt.Printf("FileEntry: %+v\n", fatFile.entry)
-
-	var chunkTotal int64
-	var buf bytes.Buffer
-	for done := false; !done; {
-		chunk := make([]byte, BUFSIZE)
-		count, err := file.Read(chunk)
-		switch err {
-		case nil:
-		case io.EOF:
-			fmt.Printf("EOF returned after reading %d bytes\n", chunkTotal)
-			done = true
-		default:
-			return []byte{}, err
-		}
-		fmt.Printf("  read chunk of %d bytes\n", count)
-		chunkTotal += int64(count)
-		wcount, err := buf.Write(chunk[:count])
-		if err != nil {
-			return []byte{}, err
-		}
-		if wcount != count {
-			fmt.Errorf("chunk write incomplete: %d != %d", wcount, count)
-		}
-	}
-	bufLen := buf.Len()
-	data := buf.Bytes()
-	dataLen := len(data)
-	if dataLen != bufLen {
-		fmt.Errorf("buffer length (%d) mismatches data length (%d)", bufLen, dataLen)
-	}
-	if int64(dataLen) != chunkTotal {
-		fmt.Errorf("chunk total (%d) mismatches data length (%d)", chunkTotal, dataLen)
-	}
-	fmt.Printf("read %d bytes from %s\n", dataLen, filename)
-	return data, nil
-}
-*/
-
-func List(image, pathname string, longFlag bool) ([]string, error) {
-	fmt.Printf("List(%s, %s, %v)\n", image, pathname, longFlag)
-	names := []string{}
-	fd, err := OpenFdImage(image)
-	if err != nil {
-		return names, err
-	}
-	defer fd.FileDisk.Close()
-	name, err := setDir(fd, pathname)
-	if err != nil {
-		return names, err
-	}
-	fmt.Printf("name=%s cwd=%s\n", name, fd.cwd)
-	var entries []fs.DirectoryEntry
-	if name == "" {
-		entries = fd.dir.Entries()
-	} else {
-		entry := fd.dir.Entry(name)
-		if entry == nil {
-			return names, fmt.Errorf("not found: %s", pathname)
-		}
-		if entry.IsDir() {
-			fmt.Printf("entry is Dir %+v\n", entry)
-			dir, err := entry.Dir()
-			if err != nil {
-				return names, err
-			}
-			fd.dir = dir
-			entries = dir.Entries()
-		} else {
-			fmt.Printf("entry is File %+v\n", entry)
-			entries = []fs.DirectoryEntry{entry}
-		}
-	}
+	//fmt.Printf("walkFS: %s %v\n", dir, entries)
+	files := []string{}
 	for _, entry := range entries {
-		name := entry.Name()
-		shortName := entry.ShortName()
-		if entry.IsDir() {
-			name += "/"
+		//fmt.Printf("entry Name=%s isDir=%v %+v\n", entry.Name(), entry.IsDir(), entry)
+		if entry.Name() == "NO NAME" {
+			continue
 		}
-		if longFlag {
-			names = append(names, fmt.Sprintf("%s\t%s\t%+v", name, shortName, entry))
+		name := filepath.Join(dir, entry.Name())
+		if entry.IsDir() {
+			if entry.Name() != "." && entry.Name() != ".." {
+				files = append(files, name+"/")
+				dirFiles, err := walkFS(fs, filepath.Join(dir, entry.Name()))
+				if err != nil {
+					return []string{}, err
+				}
+				for _, dirFile := range dirFiles {
+					if dirFile != name {
+						files = append(files, dirFile)
+					}
+				}
+			}
 		} else {
-			names = append(names, name)
+			files = append(files, name)
 		}
 	}
-	return names, nil
+	return files, nil
+}
+
+func ListImageFiles(imageFilename string) ([]string, error) {
+
+	fs, err := openImageFS(imageFilename)
+	if err != nil {
+		return []string{}, err
+	}
+	files, err := walkFS(fs, "/")
+	if err != nil {
+		return []string{}, err
+	}
+	return files, nil
+}
+
+func ExtractImageFiles(imageFilename string, destDir string) error {
+	files, err := ListImageFiles(imageFilename)
+	if err != nil {
+		return err
+	}
+	fs, err := openImageFS(imageFilename)
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file, "/") {
+			dir := strings.TrimRight(file, "/")
+			err := os.Mkdir(filepath.Join(destDir, dir), 0700)
+			if err != nil {
+				return err
+			}
+		} else {
+			err := copyFileFromImage(fs, filepath.Join(destDir, file), file)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func ImageInfo(imageFile string) (string, int64, error) {
+	stat, err := os.Stat(imageFile)
+	if err != nil {
+		return "", 0, err
+	}
+	size := stat.Size()
+	fs, err := openImageFS(imageFile)
+	if err != nil {
+		return "", 0, err
+	}
+	fmt.Printf("%+v\n", fs)
+	name := strings.TrimSpace(fs.Label())
+	return name, size, nil
+}
+
+func CreateISOImage(dstImage, srcImage, autoexec string) error {
+
+	stat, err := os.Stat(autoexec)
+	if err != nil {
+		return err
+	}
+	autoexecSize := stat.Size()
+	imageName, imageSize, err := ImageInfo(srcImage)
+
+	log.Printf("autoexecSize: %d\n", autoexecSize)
+	log.Printf("imageName: %s\n", imageName)
+	log.Printf("imageSize: %d\n", imageSize)
+
+	tmpDir, err := os.MkdirTemp("", "isobuild*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// isoFiles is the list of files in the source ISO
+	isoFiles, err := ListImageFiles(srcImage)
+	if err != nil {
+		return err
+	}
+
+	// efiSrcImage is the filename of the EFI boot image in the source ISO
+	var efiSrcImage string
+	for _, name := range isoFiles {
+		log.Println(name)
+		if strings.HasSuffix(name, ".img") {
+			efiSrcImage = name
+		}
+	}
+
+	// efiImageName is the basename of the ISO EFI boot image
+	_, efiImageName := path.Split(efiSrcImage)
+
+	// efiTmpSrcImage is the temp dir copy of the ISO EFI boot image
+	efiTmpSrcImage := filepath.Join(tmpDir, efiImageName+".iso")
+
+	// efiTmpModImage is the temp dir generated EFI boot image
+	efiTmpModImage := filepath.Join(tmpDir, efiImageName+".mod")
+
+	// open the source ISO filesystem
+	srcFS, err := openImageFS(srcImage)
+	if err != nil {
+		return err
+	}
+
+	// copy the EFI boot image from the source ISO to efiTmpSrcImage
+	err = copyFileFromImage(srcFS, efiTmpSrcImage, efiSrcImage)
+	if err != nil {
+		return err
+	}
+
+	// get the list of files in the EFI boot image
+	efiFiles, err := ListImageFiles(efiTmpSrcImage)
+	if err != nil {
+		return err
+	}
+
+	// efiBootBin is the EFI boot binary in the EFI boot image
+	var efiBootBin string
+	for _, name := range efiFiles {
+		log.Printf("EFI file: %s\n", name)
+		if !strings.HasSuffix(name, "/") && strings.HasPrefix(name, "/EFI/BOOT") {
+			efiBootBin = name
+			log.Printf("efiBootBin: %s\n", name)
+		}
+	}
+
+	_, efiBootName := path.Split(efiBootBin)
+	log.Printf("efiBootName: %s\n", efiBootName)
+
+	// efiTmpBootBin is the boot binary extracted from the EFI boot image
+	efiTmpBootBin := filepath.Join(tmpDir, efiBootBin)
+	// copy the EFI boot binary from the EFI boot image to efiTmpBootBin
+	efiFS, err := openImageFS(efiTmpSrcImage)
+	if err != nil {
+		return err
+	}
+
+	// copy the EFI boot binary from the extracted EFI boot image
+	err = copyFileFromImage(efiFS, efiTmpBootBin, efiBootBin)
+	if err != nil {
+		return err
+	}
+
+	err = CreateEFIImage(efiTmpModImage, efiTmpBootBin, efiBootName, []string{autoexec})
+	if err != nil {
+		return err
+	}
+
+	outputIsoSize := imageSize + autoexecSize*2 + ISO_PAD_BYTES
+
+	isoDisk, err := diskfs.Create(dstImage, outputIsoSize, diskfs.Raw)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("created ISO disk: %+v\n", isoDisk)
+
+	isoDisk.LogicalBlocksize = ISO_LOGICAL_BLOCK_SIZE
+	spec := diskpkg.FilesystemSpec{
+		FSType:      filesystem.TypeISO9660,
+		VolumeLabel: imageName,
+	}
+	dstFS, err := isoDisk.CreateFilesystem(spec)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("created ISO filesystem: %+v\n", dstFS)
+
+	// copy src ISO files to dest ISO
+	for _, file := range isoFiles {
+		switch file {
+		case "autoexec.ipxe":
+			// copy the modified autoexec
+			log.Println("writing modified autoexec.ipxe")
+			err = copyFileToImage(dstFS, "autoexec.ipxe", autoexec)
+			if err != nil {
+				return err
+			}
+		case efiSrcImage:
+			// defer until finalize
+		case "isolinux.bin":
+			// copy to tmp for use by finalize
+			err = copyFileFromImage(srcFS, filepath.Join(tmpDir, file), file)
+			if err != nil {
+				return err
+			}
+		case "boot.catalog":
+			// don't copy (autogenerated)
+		default:
+			log.Printf("copying: %s\n", file)
+			err = copyFileInterImage(dstFS, file, srcFS, file)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	options := iso9660.FinalizeOptions{
+		VolumeIdentifier: imageName,
+		RockRidge:        true,
+		ElTorito: &iso9660.ElTorito{
+			Entries: []*iso9660.ElToritoEntry{
+				{
+					Platform:  iso9660.BIOS,
+					Emulation: iso9660.NoEmulation,
+					BootFile:  filepath.Join(tmpDir, "isolinux.bin"),
+					BootTable: true,
+					LoadSize:  4,
+				},
+				{
+					Platform:  iso9660.EFI,
+					Emulation: iso9660.NoEmulation,
+					BootFile:  efiTmpModImage,
+				},
+			},
+		},
+	}
+	iso, ok := dstFS.(*iso9660.FileSystem)
+	if !ok {
+		return fmt.Errorf("filesystem is not iso9660")
+	}
+	log.Printf("finalizing: %+v\n", options)
+	err = iso.Finalize(options)
+	if err != nil {
+		return err
+	}
+	log.Println("finalized")
+	return nil
 }

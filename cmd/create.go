@@ -33,37 +33,39 @@ package cmd
 import (
 	"fmt"
 	"github.com/rstms/fdimage/image"
+	"os"
 
 	"github.com/spf13/cobra"
 )
 
 var createCmd = &cobra.Command{
-	Use:   "create IMAGE_FILE [LABEL] [OEM_NAME]",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	Args: cobra.RangeArgs(1, 3),
+	Use:   "create IMAGE_FILE EFI_FILE EFI_NAME [EXTRA_FILE ...]",
+	Short: "create EFI floppy image for a bootable ISO",
+	Long: `
+Create a FAT formatted floppy disk image file in IMAGE_FILE.  Copy EFI_FILE
+into the boot image as /EFI/BOOT/{EFI_NAME}
+Copy files named by EXTRA_FILE arguments into the image root directory.
+`,
+	Args: cobra.MinimumNArgs(3),
 	Run: func(cmd *cobra.Command, args []string) {
-		filename := args[0]
+		imageFile := args[0]
+		efiFile := args[1]
+		efiName := args[2]
 		force := ViperGetBool("create.force")
-		if IsFile(filename) && !force {
-			cobra.CheckErr(fmt.Errorf("file exists: %s", args[0]))
+		if force {
+			err := os.Remove(imageFile)
+			cobra.CheckErr(err)
 		}
-		label := ""
-		if len(args) > 1 {
-			label = args[1]
+		if IsFile(imageFile) {
+			cobra.CheckErr(fmt.Errorf("file exists: %s", imageFile))
 		}
-		name := ""
-		if len(args) > 2 {
-			name = args[2]
+		count := len(args) - 3
+		extraFiles := make([]string, count)
+		for i := 0; i < count; i++ {
+			extraFiles[i] = args[3+i]
 		}
-		err := image.CreateFdImage(filename, label, name)
+		err := image.CreateEFIImage(imageFile, efiFile, efiName, extraFiles)
 		cobra.CheckErr(err)
-		fmt.Printf("created: %s\n", args[0])
 	},
 }
 
